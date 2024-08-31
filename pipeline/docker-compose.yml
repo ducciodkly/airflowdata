@@ -1,0 +1,33 @@
+version: '3.8'
+services:
+  sleek-airflow:
+    image: pipeline:latest
+    volumes:
+      - ./airflow:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: airflow standalone
+    depends_on:
+      - mysql
+
+  mysql:
+    image: mysql:8.0
+    hostname: mysql
+    cap_add:
+      - SYS_NICE
+    restart: always
+    environment:
+      - MYSQL_DATABASE=airflow
+      - MYSQL_ROOT_PASSWORD=0358071492
+    ports:
+      - '3307:3306'
+    volumes:
+      - db:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  db:
+    driver: local
+
+
+
+    
