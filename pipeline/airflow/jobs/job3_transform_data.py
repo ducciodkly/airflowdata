@@ -1,64 +1,16 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
-import requests
-import json
 import os
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import uuid
 import hashlib
-from sqlalchemy import create_engine
+from airflow.models import Variable
 
-default_args = {
-    "owner": "airflow",
-    "depends_on_past": False,
-    "start_date": datetime(2024, 8, 28),
-    "email_on_failure": False,
-    "email_on_retry": False,
-    "retries": 1,
-    "retry_delay": timedelta(minutes=5),
-}
+def get_file_path(filename):
+    return os.path.join(Variable.get("data_directory", "/opt/airflow"), filename)
 
-# Create DAG
-dag = DAG(
-    "country_data_pipeline",
-    default_args=default_args,
-    description="Pipeline dữ liệu để xử lý thông tin quốc gia",
-    schedule_interval="0 8 * * *",
-)
-
-
-# Job 1: Ingest Data
-def ingest_data():
-    url = "https://restcountries.com/v3.1/all"
-    response = requests.get(url)
-    data = response.json()
-
-    if not os.path.exists("/opt/airflow/raw"):
-        os.makedirs("/opt/airflow/raw")
-
-    with open("/opt/airflow/raw/countries_data.json", "w") as f:
-        json.dump(data, f)
-
-
-# Job 2: Extract Data
-def extract_data():
-    with open("/opt/airflow/raw/countries_data.json", "r") as f:
-        data = json.load(f)
-
-    df = pd.json_normalize(data)
-
-    if not os.path.exists("/opt/airflow/foundation"):
-        os.makedirs("/opt/airflow/foundation")
-
-    df.to_csv("/opt/airflow/foundation/countries_data.csv", index=False)
-
-
-# Job 3: Transform Data
-def transform_data():
-    df = pd.read_csv("/opt/airflow/foundation/countries_data.csv", dtype=str)
+def main():
+    df = pd.read_csv(get_file_path("foundation/countries_data.csv"), dtype=str)
 
     column_mapping = {
         "name.common": "ten",
@@ -177,64 +129,7 @@ def transform_data():
         table_currencies,
         "/opt/airflow/trusted/country_currency/country_currency.parquet",
     )
+    print("Data transformed successfully.")
 
-
-# Job 4: Load Data
-def load_data():
-    db_config = {
-        "host": "host.docker.internal",
-        "port": 3306,
-        "user": "root",
-        "password": "0358071492",
-        "database": "airflow",
-    }
-
-    engine = create_engine(
-        f"mysql+mysqlconnector://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
-    )
-
-    df_countries = pq.read_table(
-        "/opt/airflow/trusted/countries/countries.parquet"
-    ).to_pandas()
-    df_countries.to_sql("countries", engine, if_exists="replace", index=False)
-
-    df_country_currency = pq.read_table(
-        "/opt/airflow/trusted/country_currency/country_currency.parquet"
-    ).to_pandas()
-    df_country_currency.to_sql(
-        "country_currency", engine, if_exists="replace", index=False
-    )
-
-    df_currencies = df_country_currency[
-        ["currency_code", "currency_name", "currency_symbol"]
-    ].drop_duplicates()
-    df_currencies.to_sql("currencies", engine, if_exists="replace", index=False)
-
-    print("Lưu dữ liệu vào MySQL hoàn tất.")
-
-
-t1 = PythonOperator(
-    task_id="ingest_data",
-    python_callable=ingest_data,
-    dag=dag,
-)
-
-t2 = PythonOperator(
-    task_id="extract_data",
-    python_callable=extract_data,
-    dag=dag,
-)
-
-t3 = PythonOperator(
-    task_id="transform_data",
-    python_callable=transform_data,
-    dag=dag,
-)
-
-t4 = PythonOperator(
-    task_id="load_data",
-    python_callable=load_data,
-    dag=dag,
-)
-
-t1 >> t2 >> t3 >> t4
+if __name__ == "__main__":
+    main()
